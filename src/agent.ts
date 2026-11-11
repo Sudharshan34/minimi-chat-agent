@@ -77,12 +77,15 @@ export async function runTurn(o: { conv: string; text: string; tz: string; emit:
   const sources = new Map<string, string>();
   emit({ type: 'status', text: 'Thinking…' });
 
-  for (let hop = 0; hop < 4; hop++) {
+  const MAX_HOPS = 4;
+  for (let hop = 0; hop < MAX_HOPS; hop++) {
+    // Last round: no tools, so the model must write the answer instead of searching again.
+    const mode = hop === MAX_HOPS - 1 ? FunctionCallingConfigMode.NONE : hop === 0 && force ? FunctionCallingConfigMode.ANY : null;
     const stream = await ai.models.generateContentStream({
       model: MODEL, contents,
       config: {
-        systemInstruction: system(now, tz), tools, maxOutputTokens: 2500, abortSignal: signal,
-        ...(hop === 0 && force ? { toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.ANY, allowedFunctionNames: ['web_search'] } } } : {}),
+        systemInstruction: system(now, tz), tools, maxOutputTokens: 4000, abortSignal: signal,
+        ...(mode ? { toolConfig: { functionCallingConfig: mode === FunctionCallingConfigMode.ANY ? { mode, allowedFunctionNames: ['web_search'] } : { mode } } } : {}),
       },
     });
     const parts: any[] = [];
@@ -104,6 +107,12 @@ export async function runTurn(o: { conv: string; text: string; tz: string; emit:
       return { functionResponse: { name: c.name, response: out } };
     }));
     contents.push({ role: 'user', parts: responses });
+  }
+
+  if (!answer.trim()) {
+    emit({ type: 'text', text: 'Sorry, I could not produce an answer. Please try again.' });
+    emit({ type: 'done' });
+    return; // do not store an empty answer in memory
   }
 
   const list = [...sources].map(([url, title]) => ({ url, title })).slice(0, 8);
